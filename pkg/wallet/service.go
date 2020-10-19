@@ -2,34 +2,39 @@ package wallet
 
 import (
 	"fmt"
-	"io/ioutil"
-	"strconv"
+	"sync"
+	"io"
+	"path/filepath"
+	"bufio"
 	"errors"
-	"github.com/Eydzhpee08/wallet/pkg/types"
-	"github.com/google/uuid"
+	"io/ioutil"
 	"log"
 	"os"
+	"strconv"
 	"strings"
-	"sync"
+	"github.com/Eydzhpee08/wallet/pkg/types"
+	"github.com/google/uuid"
+)
+var (
+	// ErrPhoneRegistered is error
+	ErrPhoneRegistered = errors.New("phone already registered")
+	// ErrAmountMustBePositive is error
+	ErrAmountMustBePositive = errors.New("amount must be greater than zero")
+	// ErrAccountNotFound is error
+	ErrAccountNotFound = errors.New("account not found")
+	// ErrNotEnoughBalance is error
+	ErrNotEnoughBalance = errors.New("not enough balance in account")
+	// ErrPaymentNotFound is error
+	ErrPaymentNotFound = errors.New("payment not found")
+	// ErrCannotRegisterAccount is error
+	ErrCannotRegisterAccount = errors.New("can not register account")
+	// ErrCannotDepositAccount is error
+	ErrCannotDepositAccount = errors.New("can not deposit account")
+	// ErrFavoriteNotFound is error
+	ErrFavoriteNotFound = errors.New("favorite payment not found")
 )
 
-type Error string
-
-func (e Error) Error() string {
-
-	return string(e)
-
-}
-
-var ErrPhoneNumberRegistred = errors.New("phone already registred")
-var ErrAmountMustBePositive = errors.New("amount must be greater that zero")
-var ErrAccountNotFound = errors.New("account not found")
-var ErrNotEnoughBalance = errors.New("not enough balance")
-var ErrPaymentNotFound = errors.New("payment not found")
-var ErrFavoriteNotFound = errors.New("favorite not found")
-var ErrFileNotFound = errors.New("File Not found")
-
-//Service -
+// Service is struct
 type Service struct {
 	nextAccountID int64
 	accounts      []*types.Account
@@ -37,64 +42,27 @@ type Service struct {
 	favorites     []*types.Favorite
 }
 
-//RegisterAccount создаем тут ак
+// RegisterAccount is method
 func (s *Service) RegisterAccount(phone types.Phone) (*types.Account, error) {
-
 	for _, account := range s.accounts {
 		if account.Phone == phone {
-			return nil, ErrPhoneNumberRegistred
+			return nil, ErrPhoneRegistered
 		}
 	}
-
 	s.nextAccountID++
 	account := &types.Account{
 		ID:      s.nextAccountID,
 		Phone:   phone,
 		Balance: 0,
 	}
-
 	s.accounts = append(s.accounts, account)
-
 	return account, nil
-
 }
 
-// так, он находит по ID
-// у нас есть слайст структур
-// нам нужен отдельная структура, чтобы туда запихнуть данные
-// вызываем цикл
-// в аргументах например мы дали ID 1
-// потом мы делаем проверку
-// acc.ID == account.ID{
-// account = acc
-//
-
+// Deposit is method
 func (s *Service) Deposit(accountID int64, amount types.Money) error {
 	if amount <= 0 {
 		return ErrAmountMustBePositive
-
-	}
-
-	var account *types.Account
-
-
-	for _, acc := range s.accounts {
-		if acc.ID == accountID {
-			account = acc
-		}
-
-	}
-	if account == nil {
-		return ErrAccountNotFound
-	}
-	account.Balance += amount
-
-	return nil
-}
-
-func (s *Service) Pay(accountID int64, amount types.Money, category types.PaymentCategory) (*types.Payment, error) {
-	if amount <= 0 {
-		return nil, ErrAmountMustBePositive
 	}
 	var account *types.Account
 	for _, acc := range s.accounts {
@@ -102,148 +70,130 @@ func (s *Service) Pay(accountID int64, amount types.Money, category types.Paymen
 			account = acc
 			break
 		}
-
 	}
-	
+
 	if account == nil {
-		return nil, ErrAccountNotFound
+		return ErrAccountNotFound
+	}
+
+	account.Balance += amount
+	return nil
+}
+
+// Pay is method
+func (s *Service) Pay(accountID int64, amount types.Money, category types.PaymentCategory) (*types.Payment, error) {
+	if amount <= 0 {
+		return nil, ErrAmountMustBePositive
+	}
+
+	account, err := s.FindAccountByID(accountID)
+	if err != nil {
+		return nil, err
 	}
 
 	if account.Balance < amount {
 		return nil, ErrNotEnoughBalance
-
 	}
-	account.Balance -= amount
 
+	account.Balance -= amount
 	paymentID := uuid.New().String()
 	payment := &types.Payment{
 		ID:        paymentID,
-		AccountID: accountID, 
-		Amount:    amount,    
+		AccountID: accountID,
+		Amount:    amount,
 		Category:  category,
 		Status:    types.PaymentStatusInProgress,
 	}
 
 	s.payments = append(s.payments, payment)
 	return payment, nil
-
 }
 
+// FindAccountByID is method
 func (s *Service) FindAccountByID(accountID int64) (*types.Account, error) {
-	var account *types.Account
-	for _, acc := range s.accounts {
-		if acc.ID == accountID {
-			account = acc
+	for _, account := range s.accounts {
+		if account.ID == accountID {
+			return account, nil
 		}
 	}
-	if account == nil {
-		return nil, ErrAccountNotFound
-	}
-	return account, nil
-
+	return nil, ErrAccountNotFound
 }
-
+// FindPaymentByID is method
 func (s *Service) FindPaymentByID(paymentID string) (*types.Payment, error) {
-	var payment *types.Payment
-	for _, pay := range s.payments {
-		if pay.ID == paymentID {
-			payment = pay
-			break
-		}
-	}
-	if payment == nil {
-		return nil, ErrPaymentNotFound
-	}
-	return payment, nil
-}
-
-
-func (s *Service) Reject(paymentID string) error {
-	var targetPayment *types.Payment
-
-	
 	for _, payment := range s.payments {
 		if payment.ID == paymentID {
-			targetPayment = payment
-			break
-		}
-
-	}
-	if targetPayment == nil {
-		return ErrPaymentNotFound
-	}
-	var targetAccount *types.Account
-
-	for _, account := range s.accounts {
-		
-		if account.ID == targetPayment.AccountID {
-			targetAccount = account
-			break
+			return payment, nil
 		}
 	}
-	if targetAccount == nil {
-		return ErrAccountNotFound
+	return nil, ErrPaymentNotFound
+}
+
+// Reject is method
+func (s *Service) Reject(paymentID string) error {
+	var payment, err = s.FindPaymentByID(paymentID)
+	if err != nil {
+		return err
 	}
-	targetPayment.Status = types.PaymentStatusFail
-	targetAccount.Balance += targetPayment.Amount
+
+	var account, er = s.FindAccountByID(payment.AccountID)
+	if er != nil {
+		return er
+	}
+
+	payment.Status = types.PaymentStatusFail
+	account.Balance += payment.Amount
 
 	return nil
-
 }
 
+// AddAccountWithBalance is method
+func (s *Service) AddAccountWithBalance(phone types.Phone, balance types.Money) (*types.Account, error) {
+	account, err := s.RegisterAccount(phone)
+	if err != nil {
+		return nil, ErrCannotRegisterAccount
+	}
 
+	err = s.Deposit(account.ID, balance)
+	if err != nil {
+		return nil, ErrCannotDepositAccount
+	}
+	return account, nil
+}
 
+// Repeat is method
 func (s *Service) Repeat(paymentID string) (*types.Payment, error) {
-	pay, err := s.FindPaymentByID(paymentID)
+	var targetPayment, err = s.FindPaymentByID(paymentID)
 	if err != nil {
 		return nil, err
 	}
 
-	payment, err := s.Pay(pay.AccountID, pay.Amount, pay.Category)
+	newPayment, err := s.Pay(targetPayment.AccountID, targetPayment.Amount, targetPayment.Category)
 	if err != nil {
 		return nil, err
 	}
 
-	return payment, nil
+	return newPayment, nil
 }
 
-
-
-
-// он создает FavoritePayment 
+// FavoritePayment is method
 func (s *Service) FavoritePayment(paymentID string, name string) (*types.Favorite, error) {
 	payment, err := s.FindPaymentByID(paymentID)
-
 	if err != nil {
 		return nil, err
 	}
 
-	favoriteID := uuid.New().String()
-	newFavorite := &types.Favorite{
-		ID:        favoriteID,
+	favorite := &types.Favorite{
+		ID:        uuid.New().String(),
 		AccountID: payment.AccountID,
 		Name:      name,
 		Amount:    payment.Amount,
 		Category:  payment.Category,
 	}
-
-	s.favorites = append(s.favorites, newFavorite)
-	return newFavorite, nil
+	s.favorites = append(s.favorites, favorite)
+	return favorite, nil
 }
 
-
-func (s *Service) FindFavoriteByID(favoriteID string) (*types.Favorite, error) {
-	for _, favorite := range s.favorites {
-		if favorite.ID == favoriteID {
-			return favorite, nil
-		}
-	}
-	return nil, ErrFavoriteNotFound
-}
-
-
-
-//PayFromFavorite для совершения платежа в Избранное
+// PayFromFavorite is method
 func (s *Service) PayFromFavorite(favoriteID string) (*types.Payment, error) {
 	favorite, err := s.FindFavoriteByID(favoriteID)
 	if err != nil {
@@ -254,474 +204,536 @@ func (s *Service) PayFromFavorite(favoriteID string) (*types.Payment, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	return payment, nil
 }
 
-//ExportToFile - для импорта данных
-func (s *Service) ExportToFile(path string) error  {
+// FindFavoriteByID is method
+func (s *Service) FindFavoriteByID(favoriteID string) (*types.Favorite, error) {
+	for _, favorite := range s.favorites {
+		if favorite.ID == favoriteID {
+			return favorite, nil
+		}
+	}
+	return nil, ErrFavoriteNotFound
+}
+
+func (s *Service) getAccounts() []*types.Account {
+	return s.accounts
+}
+
+// ExportToFile is method
+func (s *Service) ExportToFile(path string) error {
 	file, err := os.Create(path)
 	if err != nil {
 		log.Print(err)
 		return err
 	}
 	defer func() {
-		err := file.Close()
+		if closeErr := file.Close(); closeErr != nil {
+			log.Print(closeErr)
+		}
+	}()
+
+	for _, account := range s.getAccounts() {
+		ID := strconv.FormatInt(account.ID, 10) + ";"
+		phone := string(account.Phone) + ";"
+		balance := strconv.FormatInt(int64(account.Balance), 10)
+		_, err = file.Write([]byte(ID + phone + balance + "|"))
 		if err != nil {
 			log.Print(err)
+			return err
 		}
-
-		
-	}()
-	str := ""
-	for _, account := range s.accounts {
-		str += strconv.Itoa(int(account.ID)) + ";"
-		str += string(account.Phone) + ";"
-		str += strconv.Itoa(int(account.Balance)) + "|"
 	}
-
-	_, err = file.Write([]byte(str))
-	if err != nil {
-		log.Println(err)
-		return err
-	}
-
 	return nil
 }
 
-
+// ImportFromFile is method
 func (s *Service) ImportFromFile(path string) error {
 
-
-	byteData, err := ioutil.ReadFile(path)
-	if err != nil {
-		log.Println(err)
-		return err
-	}
-	
-	// обязательно ли преобразовать слайс байтов преобразовывать в стринг?
-	data := string(byteData)
-	fmt.Println(data)
-
-
-	splitSlice := strings.Split(data, "|")
-	// здесь он должен показать  весь список, тажкже убрать |
-	fmt.Println(splitSlice)
-	// тут он покажет 2 номер
-	fmt.Println(splitSlice[1])
-	// тут 1
-	fmt.Println(splitSlice[0])
-	//splitSlice = strings.Split(data, ";")
-	for _, split := range splitSlice {
-		if split != "" {
-			datas := strings.Split(split, ";")
-
-			id, err := strconv.Atoi(datas[0])
-			if err != nil {
-				log.Println(err)
-				return err
-			}
-			fmt.Println(datas[0])
-			balance, err := strconv.Atoi(datas[2])
-			fmt.Println(datas[2])
-			if err != nil {
-				log.Println(err)
-				return err
-			}
-
-			newAccount := &types.Account{
-				ID:      int64(id),
-				Phone:   types.Phone(datas[1]),
-				Balance: types.Money(balance),
-			}
-
-			s.accounts = append(s.accounts, newAccount)
-		}
-	}
-
-	return nil
-}
-
-// у нас же данные есть ведь? - например RegisterAc - который в памяти хранится
-// если она пустая то дай ошибку
-// нужна отдельная функция для создания файлов, чтобы 3 раза не писать одно и тоже
-
-func (s *Service) Export(dir string) error {
-		// внутри него данные
-		// будет тру
-	if s.accounts != nil{
-		acc := ""
-		for _, account := range s.accounts{
-			acc += strconv.Itoa(int(account.ID)) + ";"
-			acc +=string(account.Phone) + ";"
-			acc += strconv.Itoa(int(account.Balance)) +";"
-			acc += string('\n')
-		}
-		err := WriteToFile(dir +"/accounts.dump", acc)
-		if err != nil {
-			log.Print(err)
-			return err
-		}
-	}
-	if  s.payments != nil{
-		pay := ""
-
-		for _, payment := range s.payments {
-
-			pay += 	payment.ID + ";"
-			pay +=  strconv.Itoa(int(payment.AccountID)) + ";"
-			pay +=  strconv.Itoa(int(payment.Amount)) + ";"
-			pay +=  string(payment.Category) + ";"
-			pay += string(payment.Status) + ";"
-			pay += "\n"
-			}
-		err := WriteToFile(dir + "/payments.dump", pay)
-		if err != nil {
-			log.Print(err)
-			return err
-		}
-
-	}
-	if s.favorites != nil{
-		fav := ""
-		for _, favorite := range s.favorites{
-			fav += favorite.ID + ";"
-			fav += strconv.Itoa(int(favorite.AccountID)) + ";"
-			fav += favorite.Name + ";"
-			fav += strconv.Itoa(int(favorite.Amount)) + ";"
-			fav += string(favorite.Category) + ";"
-			fav += "\n"
-		}
-		err := WriteToFile(dir + "/favorites.dump", fav)
-		if err != nil {
-			log.Print(err)
-			return err
-		}
-
-	}
-
-
-
-
-
-
-
-	return  nil
-
-}
-
-
-
-
-func WriteToFile(path string, data string)error  {
-	file, err := os.Create(path)
+	file, err := os.Open(path)
 	if err != nil {
 		log.Print(err)
 		return err
 	}
 	defer func() {
-		err =  file.Close()
-		if err != nil {
-			log.Print(err)
-			return
+		if closeErr := file.Close(); closeErr != nil {
+			log.Print(closeErr)
 		}
 	}()
-	// он возвращает кол-во байтов
 
-	_, err = file.WriteString(data)
+	content := make([]byte, 0)
+	buff := make([]byte, 4)
+
+	for {
+		read, err := file.Read(buff)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			log.Print(err)
+			return err
+		}
+		content = append(content, buff[:read]...)
+	}
+	str := string(content)
+	for _, line := range strings.Split(str, "|") {
+		if len(line) <= 0 {
+			return err
+		}
+
+		item := strings.Split(line, ";")
+		ID, _ := strconv.ParseInt(item[0], 10, 64)
+		balance, _ := strconv.ParseInt(item[2], 10, 64)
+
+		s.accounts = append(s.accounts, &types.Account{
+			ID:      ID,
+			Phone:   types.Phone(item[1]),
+			Balance: types.Money(balance),
+		})
+	}
+
+	return err
+}
+
+// Export is method
+func (s *Service) Export(dir string) error {
+	log.Print("start exporting accounts entity, count of account: ", len(s.accounts))
+	accExp := 0
+	for _, account := range s.accounts {
+		ID := strconv.FormatInt(account.ID, 10) + ";"
+		phone := string(account.Phone) + ";"
+		balance := strconv.FormatInt(int64(account.Balance), 10)
+		err := WriteToFile(dir+"/accounts.dump", []byte(ID+phone+balance+"\n"))
+		if err != nil {
+			return err
+		}
+		accExp++
+	}
+	log.Print("end of exporting accounts entity, amount of exported acc: ", accExp)
+
+	log.Print("start exporting payments entity, count of payments: ", len(s.payments))
+	payExp := 0
+	for _, payment := range s.payments {
+		ID := payment.ID + ";"
+		AccountID := strconv.FormatInt(payment.AccountID, 10) + ";"
+		Amount := strconv.FormatInt(int64(payment.Amount), 10) + ";"
+		Category := string(payment.Category) + ";"
+		Status := string(payment.Status) + "\n"
+		err := WriteToFile(dir+"/payments.dump", []byte(ID+AccountID+Amount+Category+Status))
+		if err != nil {
+			return err
+		}
+		payExp++
+	}
+	log.Print("end of exporting payments entity, amount of exported pay: ", payExp)
+
+	log.Print("start exporting favorites entity, count of favorites: ", len(s.favorites))
+	favExp := 0
+	for _, favorite := range s.favorites {
+		ID := favorite.ID + ";"
+		AccountID := strconv.FormatInt(favorite.AccountID, 10) + ";"
+		Name := favorite.Name + ";"
+		Amount := strconv.FormatInt(int64(favorite.Amount), 10) + ";"
+		Category := string(favorite.Category) + "\n"
+		err := WriteToFile(dir+"/favorites.dump", []byte(ID+AccountID+Name+Amount+Category))
+		favExp++
+		if err != nil {
+			return err
+		}
+	}
+	log.Print("end of exporting favorites entity, amount of exported fav: ", favExp)
+	return nil
+}
+// WriteToFile is method
+func WriteToFile(fileName string, data []byte) error {
+	dirName := filepath.Dir(fileName)
+	if _, serr := os.Stat(dirName); serr != nil {
+		merr := os.MkdirAll(dirName, os.ModePerm)
+		if merr != nil {
+			log.Print("WriteToFile. Could not create a folder. aaaa panic: ")
+			panic(merr)
+		}
+	}
+
+	file, err := os.OpenFile(fileName, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Print("WriteToFile. Open file error: ", err)
+		return err
+	}
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			log.Print("WriteToFile. Close file error: ", closeErr)
+		}
+	}()
+	_, err = file.Write(data)
+
+	if err != nil {
+		log.Print("WriteToFile. Write file error: ", err)
+	}
+	return nil
+}
+
+// Import is method
+func (s *Service) Import(dir string) error {
+	log.Print("account count in the start of import method: ", len(s.accounts))
+	log.Print("Start Import method with param: " + dir)
+	files, err := ioutil.ReadDir(dir)
 	if err != nil {
 		log.Print(err)
-		return  err
-	}
-	return nil
-}
-func (s *Service) Import(dir string) error {
-	err := s.actionByAccounts(dir + "/accounts.dump")
-	if err != nil {
-		log.Println("err from actionByAccount")
 		return err
 	}
+	for _, file := range files {
+		log.Print("files in Import->dir: " + file.Name())
+		read, err := os.Open(dir + "/" + file.Name())
+		if err != nil {
+			log.Print(err)
+			return err
+		}
+		defer func() {
+			if closeErr := read.Close(); closeErr != nil {
+				log.Print(closeErr)
+			}
+		}()
 
-	err = s.actionByPayments(dir + "/payments.dump")
+		reader := bufio.NewReader(read)
+
+		for {
+			line, err := reader.ReadString('\n')
+			if err == io.EOF {
+				log.Print("line in OEF: ", line)
+				break
+			}
+			if err != nil {
+				log.Print(err)
+				return err
+			}
+
+			item := strings.Split(line, ";")
+			switch file.Name() {
+			case "accounts.dump":
+				acc := s.convertToAccount(item)
+				if acc != nil {
+					s.accounts = append(s.accounts, acc)
+				}
+			case "favorites.dump":
+				favorite := s.convertToFavorites(item)
+				if favorite != nil {
+					s.favorites = append(s.favorites, favorite)
+				}
+			case "payments.dump":
+				payment := s.convertToPayments(item)
+				if payment != nil {
+					s.payments = append(s.payments, payment)
+				}
+			default:
+				break
+			}
+		}
+
+	}
+	log.Print("account count in the end of import method: ", len(s.accounts))
+	return nil
+}
+
+func (s *Service) convertToAccount(item []string) *types.Account {
+	ID, _ := strconv.ParseInt(item[0], 10, 64)
+	balance, _ := strconv.ParseInt(removeEndLine(item[2]), 10, 64)
+	account, err := s.FindAccountByID(ID)
 	if err != nil {
-		log.Println("err from actionByPayments")
-		return err
+		s.nextAccountID++
+		return &types.Account{
+			ID:      ID,
+			Phone:   types.Phone(item[1]),
+			Balance: types.Money(balance),
+		}
 	}
+	account.ID = ID
+	account.Phone = types.Phone(item[1])
+	account.Balance = types.Money(balance)
+	return nil
+}
 
-	err = s.actionByFavorites(dir + "/favorites.dump")
+func (s *Service) convertToFavorites(item []string) *types.Favorite {
+	AccountID, _ := strconv.ParseInt(item[1], 10, 64)
+	Amount, _ := strconv.ParseInt(item[3], 10, 64)
+
+	favorite, err := s.FindFavoriteByID(item[0])
 	if err != nil {
-		log.Println("err from actionByFavorites")
-		return err
-	}
-
-	return nil
-}
-
-func (s *Service) actionByAccounts(path string) error {
-	byteData, err := ioutil.ReadFile(path)
-	if err == nil {
-		datas := string(byteData)
-		splits := strings.Split(datas, "\n")
-
-		for _, split := range splits {
-			if len(split) == 0 {
-				break
-			}
-
-			data := strings.Split(split, ";")
-
-			id, err := strconv.Atoi(data[0])
-			if err != nil {
-				log.Println("can't parse str to int")
-				return err
-			}
-
-			phone := types.Phone(data[1])
-
-			balance, err := strconv.Atoi(data[2])
-			if err != nil {
-				log.Println("can't parse str to int")
-				return err
-			}
-			// вот это зачем?
-			account, err := s.FindAccountByID(int64(id))
-			if err != nil {
-				acc, err := s.RegisterAccount(phone)
-				if err != nil {
-					log.Println("err from register account")
-					return err
-				}
-
-				acc.Balance = types.Money(balance)
-			} else {
-				account.Phone = phone
-				account.Balance = types.Money(balance)
-			}
+		return &types.Favorite{
+			ID:        item[0],
+			AccountID: AccountID,
+			Name:      item[2],
+			Amount:    types.Money(Amount),
+			Category:  types.PaymentCategory(item[4]),
 		}
-	} else {
-		log.Println(ErrFileNotFound.Error())
 	}
-
+	favorite.ID = item[0]
+	favorite.AccountID = AccountID
+	favorite.Name = item[2]
+	favorite.Amount = types.Money(Amount)
+	favorite.Category = types.PaymentCategory(removeEndLine(item[4]))
 	return nil
 }
 
-func (s *Service) actionByPayments(path string) error {
-	byteData, err := ioutil.ReadFile(path)
-	if err == nil {
-		datas := string(byteData)
-		splits := strings.Split(datas, "\n")
+func (s *Service) convertToPayments(item []string) *types.Payment {
+	AccountID, _ := strconv.ParseInt(item[1], 10, 64)
+	Amount, _ := strconv.ParseInt(item[2], 10, 64)
 
-		for _, split := range splits {
-			if len(split) == 0 {
-				break
-			}
-
-			data := strings.Split(split, ";")
-			id := data[0]
-
-			accountID, err := strconv.Atoi(data[1])
-			if err != nil {
-				log.Println("can't parse str to int")
-				return err
-			}
-
-			amount, err := strconv.Atoi(data[2])
-			if err != nil {
-				log.Println("can't parse str to int")
-				return err
-			}
-
-			category := types.PaymentCategory(data[3])
-
-			status := types.PaymentStatus(data[4])
-
-			payment, err := s.FindPaymentByID(id)
-			if err != nil {
-				newPayment := &types.Payment{
-					ID:        id,
-					AccountID: int64(accountID),
-					Amount:    types.Money(amount),
-					Category:  types.PaymentCategory(category),
-					Status:    types.PaymentStatus(status),
-				}
-
-				s.payments = append(s.payments, newPayment)
-			} else {
-				payment.AccountID = int64(accountID)
-				payment.Amount = types.Money(amount)
-				payment.Category = category
-				payment.Status = status
-			}
+	payment, err := s.FindPaymentByID(item[0])
+	if err != nil {
+		return &types.Payment{
+			ID:        item[0],
+			AccountID: AccountID,
+			Amount:    types.Money(Amount),
+			Category:  types.PaymentCategory(item[3]),
+			Status:    types.PaymentStatus(removeEndLine(item[4])),
 		}
-	} else {
-		log.Println(ErrFileNotFound.Error())
 	}
-
+	payment.ID = item[0]
+	payment.AccountID = AccountID
+	payment.Amount = types.Money(Amount)
+	payment.Category = types.PaymentCategory(item[3])
+	payment.Status = types.PaymentStatus(item[4])
 	return nil
 }
 
-func (s *Service) actionByFavorites(path string) error {
-	byteData, err := ioutil.ReadFile(path)
-	if err == nil {
-		datas := string(byteData)
-		splits := strings.Split(datas, "\n")
-
-		for _, split := range splits {
-			if len(split) == 0 {
-				break
-			}
-
-			data := strings.Split(split, ";")
-			id := data[0]
-
-			accountID, err := strconv.Atoi(data[1])
-			if err != nil {
-				log.Println("can't parse str to int")
-				return err
-			}
-
-			name := data[2]
-
-			amount, err := strconv.Atoi(data[3])
-			if err != nil {
-				log.Println("can't parse str to int")
-				return err
-			}
-
-			category := types.PaymentCategory(data[4])
-
-			favorite, err := s.FindFavoriteByID(id)
-			if err != nil {
-				newFavorite := &types.Favorite{
-					ID:        id,
-					AccountID: int64(accountID),
-					Name:      name,
-					Amount:    types.Money(amount),
-					Category:  types.PaymentCategory(category),
-				}
-
-				s.favorites = append(s.favorites, newFavorite)
-			} else {
-				favorite.AccountID = int64(accountID)
-				favorite.Name = name
-				favorite.Amount = types.Money(amount)
-				favorite.Category = category
-			}
-		}
-	} else {
-		log.Println(ErrFileNotFound.Error())
-	}
-
-	return nil
+func removeEndLine(balance string) string {
+	return strings.TrimRightFunc(balance, func(c rune) bool {
+		return c == '\r' || c == '\n'
+	})
 }
-
-
+// ExportAccountHistory is method
 func (s *Service) ExportAccountHistory(accountID int64) ([]types.Payment, error) {
-	_, err := s.FindAccountByID(accountID)
-	if err != nil {
-		return nil, ErrAccountNotFound
-	}
-	accountPayments := []types.Payment{}
-
+	var payments []types.Payment
 	for _, payment := range s.payments {
 		if payment.AccountID == accountID {
-			accountPayments = append(accountPayments, types.Payment{
+			payments = append(payments, *payment)
+		}
+	}
+	if len(payments) <= 0 {
+		return nil, ErrAccountNotFound
+	}
+	return payments, nil
+}
+
+// HistoryToFiles is method
+func (s *Service) HistoryToFiles(payments []types.Payment, dir string, records int) error {
+	if len(payments) > 0 {
+		if len(payments) <= records {
+			file, _ := os.OpenFile(dir+"/payments.dump", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
+			defer file.Close()
+
+			var str string
+			for _, v := range payments {
+				str += fmt.Sprint(v.ID) + ";" + fmt.Sprint(v.AccountID) + ";" + fmt.Sprint(v.Amount) + ";" + fmt.Sprint(v.Category) + ";" + fmt.Sprint(v.Status) + "\n"
+			}
+			file.WriteString(str)
+		} else {
+
+			var str string
+			k := 0
+			t := 1
+			var file *os.File
+			for _, v := range payments {
+				if k == 0 {
+					file, _ = os.OpenFile(dir+"/payments"+fmt.Sprint(t)+".dump", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0666)
+				}
+				k++
+				str = fmt.Sprint(v.ID) + ";" + fmt.Sprint(v.AccountID) + ";" + fmt.Sprint(v.Amount) + ";" + fmt.Sprint(v.Category) + ";" + fmt.Sprint(v.Status) + "\n"
+				_, _ = file.WriteString(str)
+				if k == records {
+					str = ""
+					t++
+					k = 0
+					file.Close()
+				}
+			}
+
+		}
+	}
+	return nil
+}
+
+// SumPayments is method
+func (s Service) SumPayments(goroutines int) types.Money {
+	wg := sync.WaitGroup{}
+	mu := sync.Mutex{}
+
+	i := 0
+	sum := int64(0)
+	count := len(s.payments) / goroutines
+
+	if goroutines == 0 {
+		count = len(s.payments)
+	}
+
+	for i = 0; i < goroutines-1; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			val := int64(0)
+			payments := s.payments[index*count : (index+1)*count]
+			for _, payment := range payments {
+				val += int64(payment.Amount)
+			}
+			mu.Lock()
+			sum += val
+			mu.Unlock()
+
+		}(i)
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		val := int64(0)
+		payments := s.payments[i*count:]
+		for _, payment := range payments {
+			val += int64(payment.Amount)
+		}
+		mu.Lock()
+		sum += val
+		mu.Unlock()
+
+	}()
+	wg.Wait()
+	return types.Money(sum)
+}
+// FilterPayments is method
+func (s *Service) FilterPayments(accountID int64, goroutines int) ([]types.Payment, error) {
+
+	account, err := s.FindAccountByID(accountID)
+
+	if err != nil {
+		return nil, err
+	}
+
+	wg := sync.WaitGroup{}
+	mu := sync.Mutex{}
+	count := len(s.payments) / goroutines
+	i := 0
+	var ps []types.Payment
+	if goroutines == 0 {
+		count = len(s.payments)
+	}
+
+	for i = 0; i < goroutines-1; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			var pays []types.Payment
+			payments := s.payments[index*count : (index+1)*count]
+			for _, payment := range payments {
+				if payment.AccountID == account.ID {
+					pays = append(pays, types.Payment{
+						ID:        payment.ID,
+						AccountID: payment.AccountID,
+						Amount:    payment.Amount,
+						Category:  payment.Category,
+						Status:    payment.Status,
+					})
+				}
+			}
+			mu.Lock()
+			ps = append(ps, pays...)
+			mu.Unlock()
+
+		}(i)
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		var pays []types.Payment
+		payments := s.payments[i*count:]
+		for _, payment := range payments {
+			if payment.AccountID == account.ID {
+				pays = append(pays, types.Payment{
+					ID:        payment.ID,
+					AccountID: payment.AccountID,
+					Amount:    payment.Amount,
+					Category:  payment.Category,
+					Status:    payment.Status,
+				})
+			}
+		}
+		mu.Lock()
+		ps = append(ps, pays...)
+		mu.Unlock()
+
+	}()
+	wg.Wait()
+	if len(ps) == 0 {
+		return nil, nil
+	}
+	return ps, nil
+}
+
+// FilterPaymentsByFn is method
+func (s *Service) FilterPaymentsByFn(filter func(payment types.Payment) bool, goroutines int) ([]types.Payment, error) {
+	wg := sync.WaitGroup{}
+	mu := sync.Mutex{}
+	i := 0
+	count := len(s.payments) / goroutines
+
+	var ps []types.Payment
+	if goroutines == 0 {
+		count = len(s.payments)
+	}
+
+	for i = 0; i < goroutines-1; i++ {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			var pays []types.Payment
+			payments := s.payments[index*count : (index+1)*count]
+			for _, payment := range payments {
+				p := types.Payment{
+					ID:        payment.ID,
+					AccountID: payment.AccountID,
+					Amount:    payment.Amount,
+					Category:  payment.Category,
+					Status:    payment.Status,
+				}
+
+				if filter(p) {
+					pays = append(pays, p)
+				}
+			}
+			mu.Lock()
+			ps = append(ps, pays...)
+			mu.Unlock()
+
+		}(i)
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		var pays []types.Payment
+		payments := s.payments[i*count:]
+		for _, payment := range payments {
+
+			p := types.Payment{
 				ID:        payment.ID,
 				AccountID: payment.AccountID,
 				Amount:    payment.Amount,
 				Category:  payment.Category,
 				Status:    payment.Status,
-			})
-		}
-	}
-
-	return accountPayments, nil
-}
-
-func (s *Service) HistoryToFiles(payments []types.Payment, dir string, records int) error {
-	if len(payments) == 0 {
-		return nil
-	}
-	if len(payments) <= records {
-		exportPayments(payments, dir+"/payments.dump")
-		return nil
-	}
-	var iterator int = 1
-	count := 0
-	for i := 1; i <= len(payments); i++ {
-		strIterator := strconv.Itoa(iterator)
-		fileName := dir + "/payments" + strIterator + ".dump"
-		if i == len(payments) && i-count != records {
-			exportPayments(payments[count:i], fileName)
-		}
-
-		if i-count == records {
-			exportPayments(payments[count:i], fileName)
-			count += records
-			iterator++
-		}
-	}
-	return nil
-}
-
-func exportPayments(payments []types.Payment, path string) error {
-	pay := ""
-
-	for _, payment := range payments {
-
-		pay += payment.ID + ";"
-		pay += strconv.Itoa(int(payment.AccountID)) + ";"
-		pay += strconv.Itoa(int(payment.Amount)) + ";"
-		pay += string(payment.Category) + ";"
-		pay += string(payment.Status) + ";"
-		pay += "\n"
-	}
-	err := WriteToFile(path, pay)
-	if err != nil {
-		log.Print(err)
-		return err
-	}
-	return nil
-}
-
-
-func (s *Service) SumPayments(goroutines int) types.Money {
-	wg := sync.WaitGroup{}
-	mu := sync.Mutex{}
-	var summ types.Money = 0
-	if goroutines == 0 || goroutines == 1 {
-		wg.Add(1)
-		go func(payments []*types.Payment) {
-			defer wg.Done()
-			for _, payment := range payments {
-				summ += payment.Amount
 			}
-		}(s.payments)
-	} else {
-		from := 0
-		count := len(s.payments) / goroutines
-		for i := 1; i <= goroutines; i++ {
-			wg.Add(1)
-			last := len(s.payments) - i*count
-			if i == goroutines {
-				last = 0
+
+			if filter(p) {
+				pays = append(pays, p)
 			}
-			to := len(s.payments) - last
-			go func(payments []*types.Payment) {
-				defer wg.Done()
-				s := types.Money(0)
-				for _, payment := range payments {
-					s += payment.Amount
-				}
-				mu.Lock()
-				defer mu.Unlock()
-				summ += s
-			}(s.payments[from:to])
-			from += count
 		}
-	}
+		mu.Lock()
+		ps = append(ps, pays...)
+		mu.Unlock()
+
+	}()
 
 	wg.Wait()
 
-	return summ
+	if len(ps) == 0 {
+		return nil, nil
+	}
+
+	return ps, nil
 }
