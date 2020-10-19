@@ -19,6 +19,9 @@ jobs:
           go-version: 1.15
         id: go
 
+      - name: Set up GOPRIVATE
+        run: go env -w GOPRIVATE=github.com/AzizRahimov
+
       - name: Check out code into the Go module directory
         uses: actions/checkout@v2
 
