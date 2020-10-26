@@ -50,7 +50,6 @@ type Favorite struct {
 	Amount Money
 	Category PaymentCategory
 }
-
 type Progress struct {
 	Part   int
 	Result Money
